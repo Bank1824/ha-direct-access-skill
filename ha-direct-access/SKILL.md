@@ -221,52 +221,6 @@ MQTT topic format: `zigbee2mqtt/FRIENDLY_NAME/set`
 
 ---
 
-## Device-Specific LED Reference (optional)
-
-> If you use Inovelli or other Z-Wave/Zigbee dimmers with LED bars, document your
-> color codes and effect names here. Remove this section if not applicable.
-
-### LED effect payload (Inovelli VZM31-SN / VZM32-SN)
-
-```json
-{"led_effect": {"effect": "EFFECT_NAME", "color": COLOR_NUMBER, "level": 40, "duration": DURATION_SECONDS}}
-```
-
-`duration: 255` = persistent. Always send `clear_effect` after testing.
-
-### Common color numbers
-| Color | Number |
-|-------|--------|
-| Red | 0 |
-| Orange | 21 |
-| Yellow | 42 |
-| Green | 85 |
-| Cyan | 127 |
-| Blue | 170 |
-| Violet | 212 |
-| White | 255 |
-
-### Effect names
-| Effect | Use case |
-|--------|----------|
-| `solid` | Persistent state |
-| `slow_blink` | Activity / transition |
-| `fast_blink` | Urgent attention |
-| `chase` | Emergency |
-| `clear_effect` | Reset to off |
-
-### Clear payload
-```json
-{"led_effect": {"effect": "clear_effect", "color": 0, "level": 0, "duration": 0}}
-```
-
-### Kill default hardware LED color
-```json
-{"led_intensity_when_on": 0, "led_intensity_when_off": 0}
-```
-
----
-
 ## VZM31-SN LED Reference
 
 MQTT set topics:
@@ -448,15 +402,15 @@ Do not rely on training memory for HA YAML syntax — always verify via Context7
 
 ## Skill Update Workflow
 
-This skill lives at: `~/Documents/Jamrock/skills/ha-direct-access/SKILL.md`
+This skill lives at the path where you cloned the repo, e.g. `~/path/to/ha-direct-access-skill/ha-direct-access/SKILL.md`
 
-At the **end of any HA work session**, update this file with new patterns, gotchas, or entity IDs discovered during the session. Then repackage:
+At the **end of any HA work session**, update this file with new patterns, gotchas, or entity IDs discovered during the session. Then repackage (adjust `skill_dir` to your actual clone path):
 
 ```python
 python3 -c "
-import zipfile, os, subprocess
-skill_dir = os.path.expanduser('~/Documents/Jamrock/skills/ha-direct-access')
-output = os.path.expanduser('~/Documents/Jamrock/skills/ha-direct-access.skill')
+import zipfile, os
+skill_dir = os.path.expanduser('~/path/to/ha-direct-access-skill/ha-direct-access')
+output = os.path.join(os.path.dirname(skill_dir), 'ha-direct-access.skill')
 with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as zf:
     for root, dirs, files in os.walk(skill_dir):
         for file in files:
@@ -469,8 +423,7 @@ print('Packaged:', output)
 
 At the **start of any HA work session**, read this file first:
 ```python
-client.exec_command  # not needed — Desktop Commander reads from Mac path directly
-# Use Desktop Commander read_file on ~/Documents/Jamrock/skills/ha-direct-access/SKILL.md
+# Use Desktop Commander read_file on ~/path/to/ha-direct-access-skill/ha-direct-access/SKILL.md
 ```
 
 ---
