@@ -271,6 +271,8 @@ MQTT set topics:
 
 The VZM31-SN dimmer in fan mode (paired with the Blue Fan/Light Canopy Module over Z2M) exposes a fan entity with `preset_modes`. HA's HomeKit Bridge renders any fan with `preset_modes` as an expanded tile that hides tap-to-toggle — the fan can only be turned off by dragging the slider to 0. The fix is a percentage-only template fan that wraps the canopy. HomeKit treats it as a simple fan tile: tap toggles on/off (resuming the last speed), long-press opens the slider for speed. Mirrors the Lutron Aurora UX. See HA core issue [#105179](https://github.com/home-assistant/core/issues/105179) for the upstream cause.
 
+**Breeze mode:** the canopy's breeze pattern is a Z2M `preset_mode`, so it cannot live on the fan tile without re-breaking tap-to-toggle. The pattern below exposes breeze as a separate HomeKit **switch** tile per fan (Step 3b). Turning the breeze switch on enters breeze; turning it off returns the fan to its last steady speed.
+
 ### Step 1 — Confirm canopy fan entity IDs
 
 Before applying anything, confirm the actual canopy fan `entity_id`s — names below are illustrative. Use the GET states pattern from earlier in this skill:
@@ -323,7 +325,10 @@ template:
           {{ states('fan.living_room_fan') not in
              ['off', 'unavailable', 'unknown'] }}
         percentage: >
-          {{ state_attr('fan.living_room_fan', 'percentage') | int(0) }}
+          {% set p = state_attr('fan.living_room_fan', 'percentage') | int(0) %}
+          {% if p > 0 %}{{ p }}
+          {% else %}{{ states('input_number.living_room_fan_last_speed') | int(66) }}
+          {% endif %}
         speed_count: 3
         turn_on:
           - service: fan.set_percentage
@@ -356,7 +361,10 @@ template:
           {{ states('fan.master_bedroom_fan') not in
              ['off', 'unavailable', 'unknown'] }}
         percentage: >
-          {{ state_attr('fan.master_bedroom_fan', 'percentage') | int(0) }}
+          {% set p = state_attr('fan.master_bedroom_fan', 'percentage') | int(0) %}
+          {% if p > 0 %}{{ p }}
+          {% else %}{{ states('input_number.master_bedroom_fan_last_speed') | int(66) }}
+          {% endif %}
         speed_count: 3
         turn_on:
           - service: fan.set_percentage
@@ -385,9 +393,68 @@ template:
                   value: "{{ percentage }}"
 ```
 
+### Step 3b — Breeze switches (configuration.yaml)
+
+One template switch per fan. `state` reflects whether the canopy is currently in breeze mode. `turn_on` invokes the canopy's `set_preset_mode`; `turn_off` exits breeze by setting a steady percentage equal to the remembered last speed.
+
+```yaml
+template:
+  - switch:
+      - name: "Living Room Fan Breeze"
+        unique_id: living_room_fan_breeze
+        icon: mdi:weather-windy
+        state: >
+          {{ state_attr('fan.living_room_fan', 'preset_mode') == 'breeze' }}
+        turn_on:
+          - service: fan.set_preset_mode
+            target:
+              entity_id: fan.living_room_fan
+            data:
+              preset_mode: breeze
+        turn_off:
+          - service: fan.set_percentage
+            target:
+              entity_id: fan.living_room_fan
+            data:
+              percentage: >
+                {{ states('input_number.living_room_fan_last_speed') | int(66) }}
+      - name: "Master Bedroom Fan Breeze"
+        unique_id: master_bedroom_fan_breeze
+        icon: mdi:weather-windy
+        state: >
+          {{ state_attr('fan.master_bedroom_fan', 'preset_mode') == 'breeze' }}
+        turn_on:
+          - service: fan.set_preset_mode
+            target:
+              entity_id: fan.master_bedroom_fan
+            data:
+              preset_mode: breeze
+        turn_off:
+          - service: fan.set_percentage
+            target:
+              entity_id: fan.master_bedroom_fan
+            data:
+              percentage: >
+                {{ states('input_number.master_bedroom_fan_last_speed') | int(66) }}
+```
+
+The exact preset name varies by Z2M release (`breeze`, `Breeze`, sometimes a numeric `breeze_1`). Confirm before applying:
+
+```python
+python3 -c "
+import urllib.request, json
+TOKEN = '{{HA_TOKEN}}'
+req = urllib.request.Request(
+    'http://{{HA_IP}}:8123/api/states/fan.living_room_fan',
+    headers={'Authorization': f'Bearer {TOKEN}'}
+)
+print(json.loads(urllib.request.urlopen(req).read())['attributes'].get('preset_modes'))
+"
+```
+
 ### Step 4 — HomeKit filter (homekitbridge.yaml)
 
-Hide the raw canopy fan from HomeKit; expose only the template fan. Otherwise Apple Home will show two fan tiles per room.
+Hide the raw canopy fan from HomeKit; expose only the template fan and the breeze switch. Otherwise Apple Home will show duplicate tiles.
 
 ```yaml
 filter:
@@ -397,6 +464,8 @@ filter:
   include_entities:
     - fan.living_room_fan_hk
     - fan.master_bedroom_fan_hk
+    - switch.living_room_fan_breeze
+    - switch.master_bedroom_fan_breeze
 ```
 
 ### Step 5 — Apply
@@ -416,8 +485,11 @@ Then run the standard QA — config check + `ha core check` — before closing t
 Confirm on the iPhone:
 
 - Tap the fan tile → toggles on (at last speed) / off
-- Long-press the tile → slider appears, speeds snap to low/med/high
+- Long-press the fan tile → slider appears, speeds snap to low/med/high
 - Toggling off then back on resumes the last speed (not 100%)
+- Tap the **Fan Breeze** switch tile → fan enters breeze pattern
+- Tap the breeze switch off → fan returns to the last steady speed
+- Tapping the fan tile or moving the slider while breeze is active also exits breeze (because it sends a steady percentage to the canopy)
 
 If tap still doesn't toggle, check that the template fan does **not** have `preset_modes` in its definition — that is the single most common regression.
 
