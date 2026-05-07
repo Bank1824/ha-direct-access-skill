@@ -267,6 +267,162 @@ MQTT set topics:
 
 ---
 
+## HomeKit-Friendly Fan Template (Inovelli VZM31-SN + Canopy)
+
+The VZM31-SN dimmer in fan mode (paired with the Blue Fan/Light Canopy Module over Z2M) exposes a fan entity with `preset_modes`. HA's HomeKit Bridge renders any fan with `preset_modes` as an expanded tile that hides tap-to-toggle — the fan can only be turned off by dragging the slider to 0. The fix is a percentage-only template fan that wraps the canopy. HomeKit treats it as a simple fan tile: tap toggles on/off (resuming the last speed), long-press opens the slider for speed. Mirrors the Lutron Aurora UX. See HA core issue [#105179](https://github.com/home-assistant/core/issues/105179) for the upstream cause.
+
+### Step 1 — Confirm canopy fan entity IDs
+
+Before applying anything, confirm the actual canopy fan `entity_id`s — names below are illustrative. Use the GET states pattern from earlier in this skill:
+
+```python
+python3 -c "
+import urllib.request, json
+TOKEN = '{{HA_TOKEN}}'
+req = urllib.request.Request(
+    'http://{{HA_IP}}:8123/api/states',
+    headers={'Authorization': f'Bearer {TOKEN}'}
+)
+states = json.loads(urllib.request.urlopen(req).read())
+[print(s['entity_id'], '->', s['state']) for s in states if s['entity_id'].startswith('fan.')]
+"
+```
+
+Replace `fan.living_room_fan` / `fan.master_bedroom_fan` in the YAML below with whatever you find.
+
+### Step 2 — Helpers (configuration.yaml)
+
+```yaml
+input_number:
+  living_room_fan_last_speed:
+    name: Living Room Fan Last Speed
+    min: 33
+    max: 100
+    step: 33
+    initial: 66
+    icon: mdi:fan
+  master_bedroom_fan_last_speed:
+    name: Master Bedroom Fan Last Speed
+    min: 33
+    max: 100
+    step: 33
+    initial: 66
+    icon: mdi:fan
+```
+
+### Step 3 — Template fans (configuration.yaml)
+
+Deliberately omits `preset_modes` — that is what restores tap-to-toggle in HomeKit. `speed_count: 3` snaps the slider to 33/66/100 (low/med/high), matching the canopy module's discrete speeds.
+
+```yaml
+template:
+  - fan:
+      - name: "Living Room Fan"
+        unique_id: living_room_fan_hk
+        state: >
+          {{ states('fan.living_room_fan') not in
+             ['off', 'unavailable', 'unknown'] }}
+        percentage: >
+          {{ state_attr('fan.living_room_fan', 'percentage') | int(0) }}
+        speed_count: 3
+        turn_on:
+          - service: fan.set_percentage
+            target:
+              entity_id: fan.living_room_fan
+            data:
+              percentage: >
+                {{ states('input_number.living_room_fan_last_speed')
+                   | int(66) }}
+        turn_off:
+          - service: fan.turn_off
+            target:
+              entity_id: fan.living_room_fan
+        set_percentage:
+          - service: fan.set_percentage
+            target:
+              entity_id: fan.living_room_fan
+            data:
+              percentage: "{{ percentage }}"
+          - if: "{{ percentage | int(0) > 0 }}"
+            then:
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.living_room_fan_last_speed
+                data:
+                  value: "{{ percentage }}"
+      - name: "Master Bedroom Fan"
+        unique_id: master_bedroom_fan_hk
+        state: >
+          {{ states('fan.master_bedroom_fan') not in
+             ['off', 'unavailable', 'unknown'] }}
+        percentage: >
+          {{ state_attr('fan.master_bedroom_fan', 'percentage') | int(0) }}
+        speed_count: 3
+        turn_on:
+          - service: fan.set_percentage
+            target:
+              entity_id: fan.master_bedroom_fan
+            data:
+              percentage: >
+                {{ states('input_number.master_bedroom_fan_last_speed')
+                   | int(66) }}
+        turn_off:
+          - service: fan.turn_off
+            target:
+              entity_id: fan.master_bedroom_fan
+        set_percentage:
+          - service: fan.set_percentage
+            target:
+              entity_id: fan.master_bedroom_fan
+            data:
+              percentage: "{{ percentage }}"
+          - if: "{{ percentage | int(0) > 0 }}"
+            then:
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.master_bedroom_fan_last_speed
+                data:
+                  value: "{{ percentage }}"
+```
+
+### Step 4 — HomeKit filter (homekitbridge.yaml)
+
+Hide the raw canopy fan from HomeKit; expose only the template fan. Otherwise Apple Home will show two fan tiles per room.
+
+```yaml
+filter:
+  exclude_entities:
+    - fan.living_room_fan
+    - fan.master_bedroom_fan
+  include_entities:
+    - fan.living_room_fan_hk
+    - fan.master_bedroom_fan_hk
+```
+
+### Step 5 — Apply
+
+Reload in this order — no restart needed:
+
+| Service | Why |
+|---|---|
+| `input_number/reload` | Picks up the new helpers |
+| `template/reload` | Picks up the new template fans |
+| `homekit/reload` | Re-publishes the HomeKit Bridge with the filter change |
+
+Then run the standard QA — config check + `ha core check` — before closing the task.
+
+### Step 6 — Verify in HomeKit
+
+Confirm on the iPhone:
+
+- Tap the fan tile → toggles on (at last speed) / off
+- Long-press the tile → slider appears, speeds snap to low/med/high
+- Toggling off then back on resumes the last speed (not 100%)
+
+If tap still doesn't toggle, check that the template fan does **not** have `preset_modes` in its definition — that is the single most common regression.
+
+---
+
 ## Common Patterns
 
 ### Read large files via SSH (use sed ranges, not cat)
