@@ -271,7 +271,7 @@ MQTT set topics:
 
 The VZM31-SN dimmer in fan mode (paired with the Blue Fan/Light Canopy Module over Z2M) exposes a fan entity with `preset_modes`. HA's HomeKit Bridge renders any fan with `preset_modes` as an expanded tile that hides tap-to-toggle — the fan can only be turned off by dragging the slider to 0. The fix is a percentage-only template fan that wraps the canopy. HomeKit treats it as a simple fan tile: tap toggles on/off (resuming the last speed), long-press opens the slider for speed. Mirrors the Lutron Aurora UX. See HA core issue [#105179](https://github.com/home-assistant/core/issues/105179) for the upstream cause.
 
-**Breeze mode:** the canopy's breeze pattern is a Z2M `preset_mode`, so it cannot live on the fan tile without re-breaking tap-to-toggle. The pattern below exposes breeze as a separate HomeKit **switch** tile per fan (Step 3b). Turning the breeze switch on enters breeze; turning it off returns the fan to its last steady speed.
+**Breeze / smart mode:** the canopy's wind-pattern mode is a Z2M `preset_mode`, so it cannot live on the fan tile without re-breaking tap-to-toggle. The pattern below exposes it as a separate HomeKit **switch** tile per fan (Step 3b). Turning the switch on enters the pattern; turning it off returns the fan to its last steady speed. The Z2M preset name varies across firmware/converter versions — common values are `smart`, `breeze`, `Breeze`, `breeze_1`. **Always discover the actual name from the entity's `preset_modes` attribute before writing the YAML** — see the query in Step 3b. The switch is named "Fan Breeze" in this skill regardless of the underlying preset name; rename if `smart` makes more sense in your home.
 
 ### Step 1 — Confirm canopy fan entity IDs
 
@@ -393,9 +393,25 @@ template:
                   value: "{{ percentage }}"
 ```
 
-### Step 3b — Breeze switches (configuration.yaml)
+### Step 3b — Breeze / smart switches (configuration.yaml)
 
-One template switch per fan. `state` reflects whether the canopy is currently in breeze mode. `turn_on` invokes the canopy's `set_preset_mode`; `turn_off` exits breeze by setting a steady percentage equal to the remembered last speed.
+One template switch per fan. `state` reflects whether the canopy is currently in the wind-pattern preset. `turn_on` invokes the canopy's `set_preset_mode`; `turn_off` exits the preset by setting a steady percentage equal to the remembered last speed.
+
+**Before writing this block, discover the actual preset name and substitute it everywhere `breeze` appears below.** Run:
+
+```python
+python3 -c "
+import urllib.request, json
+TOKEN = '{{HA_TOKEN}}'
+req = urllib.request.Request(
+    'http://{{HA_IP}}:8123/api/states/fan.living_room_fan',
+    headers={'Authorization': f'Bearer {TOKEN}'}
+)
+print(json.loads(urllib.request.urlopen(req).read())['attributes'].get('preset_modes'))
+"
+```
+
+Pick the wind-pattern entry from that list (commonly `smart`, `breeze`, `Breeze`, or `breeze_1`) and use it as the `preset_mode:` value AND in the `state:` comparison. The two must match exactly, including case.
 
 ```yaml
 template:
@@ -436,20 +452,6 @@ template:
             data:
               percentage: >
                 {{ states('input_number.master_bedroom_fan_last_speed') | int(66) }}
-```
-
-The exact preset name varies by Z2M release (`breeze`, `Breeze`, sometimes a numeric `breeze_1`). Confirm before applying:
-
-```python
-python3 -c "
-import urllib.request, json
-TOKEN = '{{HA_TOKEN}}'
-req = urllib.request.Request(
-    'http://{{HA_IP}}:8123/api/states/fan.living_room_fan',
-    headers={'Authorization': f'Bearer {TOKEN}'}
-)
-print(json.loads(urllib.request.urlopen(req).read())['attributes'].get('preset_modes'))
-"
 ```
 
 ### Step 4 — HomeKit filter (homekitbridge.yaml)
