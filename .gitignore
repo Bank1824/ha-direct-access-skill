@@ -6,3 +6,7 @@
 
 # macOS
 .DS_Store
+
+# Real connection details (IP, SSH creds, API token) — never commit these.
+# Copy .secrets.example/ to .secrets/ and fill in your own instance's values.
+**/.secrets/

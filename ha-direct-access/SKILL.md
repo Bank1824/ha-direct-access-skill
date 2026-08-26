@@ -4,42 +4,82 @@ description: >
   Direct access to your Home Assistant instance via Desktop Commander.
   Use this skill whenever making any change to Home Assistant — editing config files,
   writing automations, running CLI commands, calling the REST API, or performing QA checks.
-  This skill is required for ALL Jamrock HA work. Always read it before touching anything
-  in HA, including simple tasks like reloading automations or checking entity states.
+  This skill is required for all HA work on your instance. Always read it before touching
+  anything in HA, including simple tasks like reloading automations or checking entity states.
 ---
 
-# Home Assistant Direct Access — Jamrock
+# Home Assistant Direct Access
 
 ## Connection Details
 
-| Parameter | Value |
-|-----------|-------|
-| Host | {{HA_IP}} |
-| SSH Port | 22 |
-| SSH User | root |
-| SSH Password | {{SSH_PASSWORD}} |
-| HA Web UI | http://{{HA_IP}}:8123 |
-| Long-lived Token | {{HA_TOKEN}} |
+Real connection details (host, SSH creds, API token) live in
+`{{SKILL_PATH}}/.secrets/connection.md` — a folder that's gitignored, never
+committed, and never packaged into the `.skill` upload. Read that file
+first (via Desktop Commander / filesystem access) and substitute its values
+for every `{{HA_IP}}`/`{{HA_TOKEN}}` placeholder in the commands below. If
+`.secrets/` doesn't exist yet, run `configure.sh` or copy
+`.secrets.example/` to `.secrets/` and fill it in by hand.
 
 ---
 
-## SSH Access via Paramiko
+## Prefer the Home Assistant MCP server — SSH/REST is a fallback
 
-`sshpass` is not available on the Mac. Use Python `paramiko` instead — it is installed.
+If a `home-assistant` MCP server (`mcp__home-assistant__*` tools) is
+connected, use it first for anything it covers: reading/setting entity
+state, calling services, managing automations/scripts/scenes/dashboards,
+getting logs, history, device/area info, backups, add-ons, etc. It never
+requires putting the bearer token in a visible command, and it validates
+inputs before touching HA.
 
-### Standard SSH command pattern
+Only drop to the raw SSH/REST methods in this file when the task genuinely
+needs them — things the MCP server doesn't expose, such as:
+- Direct edits to YAML files outside the config entities MCP manages (e.g.
+  `homekitbridge.yaml`, raw `.storage/*` repair)
+- Tailing/grepping `home-assistant.log` for a specific pattern
+- Running arbitrary HA CLI commands (`ha core check`, `ha ... `) over SSH
+- MQTT publish for testing device-specific payloads
+- Anything the MCP server errors on or doesn't support yet
 
-\`\`\`python
-python3 -c "
+When falling back to SSH/REST, still keep the token out of shell history
+where practical (e.g. read it from `.secrets/connection.md` into a Python
+variable rather than pasting it into a bare `curl` command line).
+
+---
+
+## SSH Access
+
+This is a **Linux host** — key-based SSH only (`~/.ssh/haos_access`).
+
+### Standard SSH command (preferred)
+
+```bash
+ssh haos 'YOUR COMMAND HERE'
+```
+
+> Uses `~/.ssh/config` alias (`haos` → `root@{{HA_IP}}` with `~/.ssh/haos_access` key).
+
+### Multi-command / SFTP via Python (use ha-mcp virtualenv python)
+
+```python
+~/.local/share/uv/tools/ha-mcp/bin/python3 -c "
 import paramiko
 client = paramiko.SSHClient()
 client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-client.connect('{{HA_IP}}', port=22, username='root', password='{{SSH_PASSWORD}}')
-stdin, stdout, stderr = client.exec_command('YOUR COMMAND HERE')
-print(stdout.read().decode())
+client.connect('{{HA_IP}}', port=22, username='root', key_filename='~/.ssh/haos_access')
+stdin, stdout, stderr = client.exec_command('ha core check 2>&1')
+print('Core check:', stdout.read().decode().strip())
 client.close()
 "
-\`\`\`
+```
+
+> **Note:** paramiko IS available inside the ha-mcp virtualenv at
+> `~/.local/share/uv/tools/ha-mcp/bin/python3`, useful for
+> `exec_command` (multi-command sessions, structured output). **Do NOT use
+> `open_sftp()` against `haos`** — confirmed 2026-08-06 that HAOS's SSH
+> server has no `sftp` subsystem; `open_sftp()` fails with `Channel closed`
+> even though plain SSH exec works fine. For file writes, use the
+> local-write + `ssh haos 'cat > target' < localfile` pattern below instead
+> of SFTP, despite what the "Safe file editing" section further down says.
 
 ### Key files on HA
 
@@ -162,7 +202,7 @@ python3 -c "
 import paramiko
 client = paramiko.SSHClient()
 client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-client.connect('{{HA_IP}}', port=22, username='root', password='{{SSH_PASSWORD}}')
+client.connect('{{HA_IP}}', port=22, username='root', key_filename='~/.ssh/haos_access')
 stdin, stdout, stderr = client.exec_command('ha core check 2>&1')
 print('Core check:', stdout.read().decode().strip())
 client.close()
@@ -171,7 +211,7 @@ client.close()
 
 Expected: `Command completed successfully.`
 
-For visual confirmation ask Ore to screenshot Settings → Repairs in the HA UI.
+For visual confirmation ask a household member to screenshot Settings → Repairs in the HA UI.
 
 ---
 
@@ -184,40 +224,52 @@ For visual confirmation ask Ore to screenshot Settings → Repairs in the HA UI.
 ### Structure to follow
 
 ```
-### Lights & Switches
-| Entity | Device | Location |
-|--------|--------|----------|
-| `light.living_room` | Hue bulb | Living Room |
+### Electricity
+| Entity | Description |
+|--------|-------------|
+| `sensor.example_price` | Current price per kWh |
+| `sensor.example_tariff` | Current tariff (`day`/`night`) |
+| `automation.example_sync_tariff` | Syncs tariff to utility meters |
 
-### Fans
-| Entity | Device | Location |
-|--------|--------|----------|
-| `fan.living_room_fan` | Smart fan | Living Room |
+### Presence
+| Entity | Description |
+|--------|-------------|
+| `person.example` | Presence (`home`/`not_home`) |
+| `binary_sensor.everyone_home` | Template: `on` when someone tracked is home |
 
-### Temperature Sensors
-| Entity | Location |
-|--------|----------|
-| `sensor.downstairs_temperature` | Thermostat |
+### Buttons / Remotes
+| Entity | Description |
+|--------|-------------|
+| `event.example_button` | Fires `click`/`double_click`/`press` events |
 
-### Locks & Doors
-| Entity | Device |
-|--------|--------|
-| `lock.front_door` | Smart lock |
-| `binary_sensor.front_door` | Door contact sensor |
-| `binary_sensor.doorbell_button` | Doorbell press |
+### Watering / Irrigation
+| Entity | Description |
+|--------|-------------|
+| `binary_sensor.watering_skip_today` | `on` if rain expected or rained yesterday |
+| `automation.watering_zone_morning` | Scheduled zone watering trigger |
+| `script.water_zone` | Zone watering script |
 
-### Alarm
-| Entity | States |
-|--------|--------|
-| `alarm_control_panel.alarmo` | disarmed, arming, armed_home, armed_away, armed_night, pending, triggered |
+### Updates & Monitoring
+| Entity | Description |
+|--------|-------------|
+| `sensor.updates_available_count` | Count of `update.*` entities in `on` state |
+| `update.home_assistant_core_update` | HA Core update |
 
-### Z2M Device Friendly Names (MQTT topics)
-| Friendly Name | Device | Notes |
-|---------------|--------|-------|
-| `Your Device Name` | Device type | Case-sensitive, special chars matter |
+### Backup
+| Entity | Description |
+|--------|-------------|
+| `sensor.backup_backup_manager_state` | `idle` / `create_backup` / ... |
+| `automation.scheduled_backup` | Scheduled backup trigger (uses `backup.create_automatic`) |
+
+### Batteries
+| Entity | Description |
+|--------|-------------|
+| `sensor.example_device_battery` | Battery % for a given device |
 ```
 
-MQTT topic format: `zigbee2mqtt/FRIENDLY_NAME/set`
+Fill in your own instance's real entities in place of the examples above — don't paste this section verbatim into a shared/public copy of the skill, since entity names and layout reveal your home's device inventory.
+
+### MQTT topic format: `zigbee2mqtt/FRIENDLY_NAME/set`
 
 ---
 
@@ -275,7 +327,7 @@ client.exec_command('wc -l /homeassistant/automations.yaml')
 client.exec_command('sed -n "100,200p" /homeassistant/automations.yaml')
 ```
 
-### Full HA restart (confirm with Ore first — 60s downtime)
+### Full HA restart (confirm with other household members first — 60s downtime)
 ```python
 python3 -c "
 import urllib.request, json
@@ -289,39 +341,72 @@ req = urllib.request.Request(
 print('Restart sent:', urllib.request.urlopen(req).status)
 "
 ```
-Aysha's Apple Home stays responsive during restart.
+Other household members' Apple Home/HomeKit clients stay responsive during restart.
 
-### Safe file editing — three methods
+### CRITICAL: Never use `cat file | ssh haos 'cat > target'` to write files
 
-**Method 1 — Append via SFTP (preferred for new automations/scripts)**
-Heredoc quoting breaks on YAML special characters. Always use SFTP:
-```python
-sftp = client.open_sftp()
-with sftp.open('/homeassistant/automations.yaml', 'a') as f:
-    f.write(yaml_block)
-sftp.close()
+This pattern **silently corrupts files** — if the SSH connection drops or pipe fails mid-transfer, the target file is truncated to 0 bytes. HA then marks the storage as corrupt and renames it, breaking entities.
+
+**Instead, always use one of these safe methods.** (SFTP is NOT an option here
+— confirmed 2026-08-06 that HAOS's SSH server has no `sftp` subsystem;
+`open_sftp()` fails with `Channel closed`. Don't use `sftp.open(...)`
+anywhere against `haos` despite older advice suggesting it.)
+
+1. **Write locally first, then copy via SSH heredoc (preferred — works for
+   any file, JSON or YAML):**
+   ```bash
+   # Pull the current file to a local scratch copy first if editing in place
+   ssh haos 'cat /homeassistant/.storage/target' > /tmp/target.json
+   # Edit /tmp/target.json locally (Edit tool, or python json load/dump)
+   # Then write it back the same safe way:
+   ssh haos 'cat > /homeassistant/.storage/target' < /tmp/target.json
+   ```
+   Always validate before writing back: `python3 -c "import json; json.load(open('/tmp/target.json'))"`
+   for JSON storage files, or `ha core check` after writing for YAML config.
+
+2. **`scp` with a real path** (not piped stdin) is a fallback if method 1's
+   heredoc has issues, but hasn't been reliably tested against HAOS's SSH
+   subsystem — prefer method 1.
+
+**If a storage file is corrupted:** check for `.corrupt.*` backup, restore it, delete the corrupt marker, and restart HA.
+
+---
+
+### Safe file editing — local-write + heredoc, three patterns
+
+All three pull the file locally first (`ssh haos 'cat /path/to/file' > /tmp/local.copy`),
+edit the local copy, then push back with `ssh haos 'cat > /path/to/file' < /tmp/local.copy`.
+
+**Pattern 1 — Append (new automations/scripts)**
+```bash
+ssh haos 'cat /homeassistant/automations.yaml' > /tmp/automations.yaml
+cat new_block.yaml >> /tmp/automations.yaml
+python3 -c "import yaml; yaml.safe_load(open('/tmp/automations.yaml'))"  # validate first
+ssh haos 'cat > /homeassistant/automations.yaml' < /tmp/automations.yaml
 ```
 
-**Method 2 — Delete lines by number**
-```python
-# Confirm line numbers first
-stdin, stdout, stderr = client.exec_command('grep -n "target" /homeassistant/automations.yaml')
-print(stdout.read().decode())
-# Delete the range
-client.exec_command('sed -i "START,ENDd" /homeassistant/automations.yaml')
+**Pattern 2 — Delete lines by number**
+```bash
+ssh haos 'grep -n "target" /homeassistant/automations.yaml'   # confirm line numbers first
+ssh haos 'cat /homeassistant/automations.yaml' > /tmp/automations.yaml
+sed -i 'START,ENDd' /tmp/automations.yaml
+ssh haos 'cat > /homeassistant/automations.yaml' < /tmp/automations.yaml
 ```
 
-**Method 3 — String replace via SFTP (safest — handles quotes, slashes, ampersands)**
-```python
-sftp = client.open_sftp()
-with sftp.open('/homeassistant/automations.yaml', 'r') as f:
-    content = f.read().decode()
+**Pattern 3 — String replace (safest for targeted edits — handles quotes, slashes, ampersands)**
+```bash
+ssh haos 'cat /homeassistant/automations.yaml' > /tmp/automations.yaml
+python3 -c "
+with open('/tmp/automations.yaml') as f:
+    content = f.read()
+assert content.count('old_string') == 1  # verify match count first
 content = content.replace('old_string', 'new_string', 1)
-with sftp.open('/homeassistant/automations.yaml', 'w') as f:
+with open('/tmp/automations.yaml', 'w') as f:
     f.write(content)
-sftp.close()
+"
+ssh haos 'cat > /homeassistant/automations.yaml' < /tmp/automations.yaml
 ```
-Always verify match count first: `grep -c "exact_string" /homeassistant/automations.yaml`
+Always verify match count before replacing, and run `ha core check` after writing back.
 
 ### HA log access
 ```python
@@ -402,37 +487,61 @@ Do not rely on training memory for HA YAML syntax — always verify via Context7
 
 ## Skill Update Workflow
 
-This skill lives at the path where you cloned the repo, e.g. `~/path/to/ha-direct-access-skill/ha-direct-access/SKILL.md`
+If you keep a local working copy of this skill (e.g. under
+`~/.agents/skills/ha-direct-access/`) separate from this repo checkout,
+update the local copy at the **end of any HA work session** with anything
+new discovered — that's what gets auto-loaded at the start of the next
+session.
 
-At the **end of any HA work session**, update this file with new patterns, gotchas, or entity IDs discovered during the session. Then repackage (adjust `skill_dir` to your actual clone path):
+**When syncing changes back to this repo, never copy your local copy's
+`.secrets/` folder or any file containing real host/token/credential
+values into the tracked tree.** Only sync the structural/procedural
+content (SSH patterns, QA steps, reload logic, etc.) — keep entity
+references and connection details in the local, gitignored copy or in
+`.secrets/`.
 
-```python
-python3 -c "
-import zipfile, os
-skill_dir = os.path.expanduser('~/path/to/ha-direct-access-skill/ha-direct-access')
-output = os.path.join(os.path.dirname(skill_dir), 'ha-direct-access.skill')
-with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as zf:
-    for root, dirs, files in os.walk(skill_dir):
-        for file in files:
-            filepath = os.path.join(root, file)
-            arcname = os.path.relpath(filepath, os.path.dirname(skill_dir))
-            zf.write(filepath, arcname)
-print('Packaged:', output)
-"
-```
+---
 
-At the **start of any HA work session**, read this file first:
-```python
-# Use Desktop Commander read_file on ~/path/to/ha-direct-access-skill/ha-direct-access/SKILL.md
-```
+## Reference File
+
+A quick-reference summary can also live in your project's `AGENTS.md` root
+file. It covers connection details, access methods, integrations, and
+Context7 usage. Agents that support `AGENTS.md` will read it automatically
+— keep the same secrets-separation rule in mind there too.
 
 ---
 
 ## Notes
 
-- `sshpass` is NOT installed on the Mac — always use paramiko
-- `requests` may not be available — always use `urllib.request`
-- Z2M friendly names are case-sensitive; ampersands must be exact (`Living Room Fan & Light Switch`)
+- **Linux host** — key-based SSH via `ssh haos` alias (or `~/.ssh/haos_access` directly); paramiko is available inside the ha-mcp venv (`~/.local/share/uv/tools/ha-mcp/bin/python3`)
+- `requests` may not be available on system Python — always use `urllib.request`
+- If HA runs in a VM (e.g. under KVM/libvirt) on a separate network segment from
+  your LAN devices, some `command_line`/network-based sensors may be unreachable
+  from the VM depending on routing — record your own topology in `.secrets/connection.md`
+  or a local notes file. Do NOT treat `unknown` as a YAML/entity bug without first
+  checking network reachability from the HA host/VM.
+- Z2M friendly names are case-sensitive; ampersands must be exact (e.g. `Living Room Fan & Light Switch`)
 - VZM31-SN `duration: 255` effects persist until cleared — always send `clear_effect` after testing
-- SSH add-on may need restart if connections refused (password not saved in add-on config)
-- The Mac home path has a trailing dot: `/Users/truestorey./` — use this for all Desktop Commander file writes
+- ha-mcp MCP server is already configured in Claude Code at `~/.local/bin/ha-mcp`
+- WebSocket supervisor API available via `ws://{{HA_IP}}:8123/api/websocket`
+- **A Fedora host reboot cold-boots the HAOS VM, not a graceful HA restart.** Distinguish
+  the two: an HA-only restart (`homeassistant.restart` or `ha_restart`) leaves the VM
+  `running` the whole time (`sudo virsh domstate homeassistant` stays `running`); a host
+  reboot shows up as `op=start reason=booted` in the host's libvirt audit log
+  (`journalctl` on the Fedora host, not `haos`) and a fresh kernel boot in
+  `ssh haos 'journalctl -b 0'`. Use `journalctl --list-boots` **on the Fedora host** to see
+  host reboot history when something looks HA-restart-related but the timing feels off — do
+  this before assuming it's an HA/integration bug. `libvirt-guests.service` is enabled
+  (2026-08-25) so *graceful* host reboots now resume the VM instead of cold-booting it, but
+  hard power loss/manual resets still cold-boot regardless.
+- **A restart/reload can make a `button.*` entity's state change look like a real press —
+  check `context.user_id`/`context.parent_id` before treating it as one.** A genuine press
+  (via UI, service call, or automation) always has a populated context; a state reset from
+  an integration reload has `user_id: null, parent_id: null`. Log any such false-positive
+  incidents you catch in your own local changelog/notes so future sessions don't rediscover it.
+- **Before assuming a device's "missing" capability is a bug in a custom integration,
+  check the raw API data first.** `ha_get_integration(entry_id=..., include_diagnostics=True,
+  device_id=...)` returns the vendor API's actual capability dict for a device — if a key
+  the integration's code references (e.g. a switch type) is absent there, the vendor
+  genuinely doesn't expose it for that model, and patching the integration to force-create
+  the entity will just crash on the next state read.
