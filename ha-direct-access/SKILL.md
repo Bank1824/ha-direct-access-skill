@@ -4,42 +4,56 @@ description: >
   Direct access to your Home Assistant instance via Desktop Commander.
   Use this skill whenever making any change to Home Assistant — editing config files,
   writing automations, running CLI commands, calling the REST API, or performing QA checks.
-  This skill is required for ALL Jamrock HA work. Always read it before touching anything
+  This skill is required for all HA work on your instance. Always read it before touching anything
   in HA, including simple tasks like reloading automations or checking entity states.
 ---
 
-# Home Assistant Direct Access — Jamrock
+# Home Assistant Direct Access
 
 ## Connection Details
 
-| Parameter | Value |
-|-----------|-------|
-| Host | {{HA_IP}} |
-| SSH Port | 22 |
-| SSH User | root |
-| SSH Password | {{SSH_PASSWORD}} |
-| HA Web UI | http://{{HA_IP}}:8123 |
-| Long-lived Token | {{HA_TOKEN}} |
+Real connection details (host, SSH key path, API token) live in
+`{{SKILL_PATH}}/.secrets/connection.md` — a folder that is gitignored, never
+committed, and never packaged into the `.skill` upload. Read that file first
+(via Desktop Commander / filesystem access) and substitute its values for every
+`{{HA_IP}}`, `{{SSH_KEY_PATH}}` and `{{HA_TOKEN}}` placeholder in the commands
+below. If `.secrets/` doesn't exist yet, run `configure.sh` or copy
+`.secrets.example/` to `.secrets/` and fill it in by hand.
+
+**Never write real values back into this file.** It is meant to stay safe to
+share, sync to git, and package.
+
+### Prefer the Home Assistant MCP server when it covers the task
+
+If a Home Assistant MCP server is connected, use it first for what it covers
+(entity state, service calls, automations/scripts, history, logs). Its tool
+calls never put the bearer token in a visible command. Fall back to the SSH and
+REST patterns below for what it doesn't expose — raw YAML edits, `ha core check`,
+log grepping, MQTT test payloads.
 
 ---
 
-## SSH Access via Paramiko
+## SSH Access
 
-`sshpass` is not available on the Mac. Use Python `paramiko` instead — it is installed.
+Use **key-based auth** (see SETUP.md). With an `~/.ssh/config` alias
+(e.g. `Host ha` → `root@{{HA_IP}}`, `IdentityFile` = your key), plain
+`ssh ha 'YOUR COMMAND'` works for one-liners.
 
-### Standard SSH command pattern
+### Standard paramiko pattern (multi-command, SFTP)
 
-\`\`\`python
+`{{SSH_KEY_PATH}}` must be an absolute path — paramiko does not expand `~`.
+
+```python
 python3 -c "
 import paramiko
 client = paramiko.SSHClient()
 client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-client.connect('{{HA_IP}}', port=22, username='root', password='{{SSH_PASSWORD}}')
+client.connect('{{HA_IP}}', port=22, username='root', key_filename='{{SSH_KEY_PATH}}')
 stdin, stdout, stderr = client.exec_command('YOUR COMMAND HERE')
 print(stdout.read().decode())
 client.close()
 "
-\`\`\`
+```
 
 ### Key files on HA
 
@@ -59,7 +73,7 @@ Use `urllib.request` (stdlib, always available). Do NOT use `requests` — it ma
 
 ### GET states
 
-\`\`\`python
+```python
 python3 -c "
 import urllib.request, json
 TOKEN = '{{HA_TOKEN}}'
@@ -71,11 +85,11 @@ resp = urllib.request.urlopen(req)
 states = json.loads(resp.read())
 [print(s['entity_id'], s['state']) for s in states if 'keyword' in s['entity_id']]
 "
-\`\`\`
+```
 
 ### POST service call
 
-\`\`\`python
+```python
 python3 -c "
 import urllib.request, json
 TOKEN = '{{HA_TOKEN}}'
@@ -88,7 +102,7 @@ req = urllib.request.Request(
 resp = urllib.request.urlopen(req)
 print('Status:', resp.status)
 "
-\`\`\`
+```
 
 ---
 ## Targeted Reloads (no restart needed)
@@ -105,7 +119,7 @@ Always prefer targeted reloads over full HA restarts. Full restarts only require
 
 ### Reload all reloadable components
 
-\`\`\`python
+```python
 python3 -c "
 import urllib.request, json
 TOKEN = '{{HA_TOKEN}}'
@@ -125,7 +139,7 @@ for svc in services:
     except Exception as e:
         print(f'FAIL {svc}: {e}')
 "
-\`\`\`
+```
 
 ---
 
@@ -135,7 +149,7 @@ for svc in services:
 
 ### 1. Config check
 
-\`\`\`python
+```python
 python3 -c "
 import urllib.request, json
 TOKEN = '{{HA_TOKEN}}'
@@ -149,7 +163,7 @@ resp = urllib.request.urlopen(req)
 result = json.loads(resp.read())
 print(result.get('result'), result.get('errors', 'none'))
 "
-\`\`\`
+```
 
 Expected: `valid None`
 
@@ -157,21 +171,21 @@ Expected: `valid None`
 
 The repairs API is WebSocket-only — use HA CLI over SSH instead:
 
-\`\`\`python
+```python
 python3 -c "
 import paramiko
 client = paramiko.SSHClient()
 client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-client.connect('{{HA_IP}}', port=22, username='root', password='{{SSH_PASSWORD}}')
+client.connect('{{HA_IP}}', port=22, username='root', key_filename='{{SSH_KEY_PATH}}')
 stdin, stdout, stderr = client.exec_command('ha core check 2>&1')
 print('Core check:', stdout.read().decode().strip())
 client.close()
 "
-\`\`\`
+```
 
 Expected: `Command completed successfully.`
 
-For visual confirmation ask Ore to screenshot Settings → Repairs in the HA UI.
+For visual confirmation ask a household member to screenshot Settings → Repairs in the HA UI.
 
 ---
 
@@ -505,7 +519,7 @@ client.exec_command('wc -l /homeassistant/automations.yaml')
 client.exec_command('sed -n "100,200p" /homeassistant/automations.yaml')
 ```
 
-### Full HA restart (confirm with Ore first — 60s downtime)
+### Full HA restart (confirm with your household first — ~60s downtime)
 ```python
 python3 -c "
 import urllib.request, json
@@ -519,9 +533,31 @@ req = urllib.request.Request(
 print('Restart sent:', urllib.request.urlopen(req).status)
 "
 ```
-Aysha's Apple Home stays responsive during restart.
+Apple Home / HomeKit clients stay responsive during the restart.
+
+### Never write `.storage/*` files while HA is running
+
+HA keeps registries, dashboards and many integration configs (Alarmo, Lovelace,
+entity/device registries) in memory and flushes them to `.storage/` on its own
+schedule. A direct file edit is either ignored or silently overwritten — and can
+leave dangling references that break things later. Always use the matching API:
+
+| What | Write path |
+|------|------------|
+| Entity / device registry (rename, area, labels) | WebSocket `config/entity_registry/update`, `config/device_registry/update` |
+| Dashboards (storage mode) | WebSocket `lovelace/config` → modify → `lovelace/config/save` → re-read to verify |
+| Alarmo sensors | `POST /api/alarmo/sensors` (see Alarmo section) |
+
+The file-editing methods below are for YAML config (`automations.yaml`,
+`scripts.yaml`, `configuration.yaml`, …) only.
 
 ### Safe file editing — three methods
+
+SFTP works with the official **Terminal & SSH** add-on. Some SSH setups have no
+`sftp` subsystem (`open_sftp()` fails with `Channel closed`); there, edit a local
+copy and push it with `scp`, then run `ha core check`. Avoid
+`ssh host 'cat > file' < local` for important files — a dropped connection
+truncates the target.
 
 **Method 1 — Append via SFTP (preferred for new automations/scripts)**
 Heredoc quoting breaks on YAML special characters. Always use SFTP:
@@ -600,6 +636,99 @@ client.exec_command('mosquitto_sub -h localhost -t "zigbee2mqtt/bridge/devices" 
 
 ---
 
+## Alarmo Sensor Config — NEVER edit `.storage/alarmo.storage` directly
+
+**CRITICAL LESSON (2026-05-27):** Alarmo keeps its sensor/area/user/automation
+config in an in-memory cache and writes it back to `.storage/alarmo.storage` on
+its own schedule. Editing that file directly — even with a `config_entries`
+reload afterward — does NOT stick: Alarmo overwrites your edits with its cached
+copy, silently reverting every change. This once re-enrolled 7 deleted/renamed
+sensors whose entities no longer existed; with `trigger_unavailable: true` they
+blocked **every** arm attempt ("Alarm Failed to Arm — Open sensors: None ×N",
+where "None" = the notification template reading `friendly_name` off entities
+that no longer exist).
+
+**Always mutate Alarmo sensors through its HTTP endpoint** `POST /api/alarmo/sensors`
+(the same path its frontend uses). This updates memory AND persists correctly.
+
+```python
+import urllib.request, json
+TOKEN = '{{HA_TOKEN}}'
+HEADERS = {'Authorization': f'Bearer {TOKEN}', 'Content-Type': 'application/json'}
+
+def alarmo_sensor(payload):
+    req = urllib.request.Request('http://{{HA_IP}}:8123/api/alarmo/sensors',
+        data=json.dumps(payload).encode(), headers=HEADERS, method='POST')
+    return urllib.request.urlopen(req).status  # 200 = ok
+
+# Remove a sensor
+alarmo_sensor({'entity_id': 'binary_sensor.x', 'remove': True})
+# Create / update a sensor (full field set)
+alarmo_sensor({'entity_id': 'binary_sensor.y', 'type': 'motion',
+    'modes': ['armed_away'], 'use_exit_delay': True, 'use_entry_delay': False,
+    'arm_on_close': False, 'allow_open': False, 'always_on': False,
+    'trigger_unavailable': False, 'auto_bypass': False, 'auto_bypass_modes': [],
+    'area': 'YOUR_ALARMO_AREA_ID', 'enabled': True, 'entry_delay': None, 'delay_on': None})
+# Rename: pass new_entity_id (deletes old, creates new with remaining fields)
+alarmo_sensor({'entity_id': 'binary_sensor.old', 'new_entity_id': 'binary_sensor.new',
+    'type': 'window', 'modes': ['armed_away','armed_home','armed_night']})
+```
+
+Field schema (all optional except `entity_id`): `type` (door/window/motion/
+tamper/environmental…), `modes`, `use_exit_delay`, `use_entry_delay`,
+`arm_on_close`, `allow_open`, `always_on`, `trigger_unavailable`, `auto_bypass`,
+`auto_bypass_modes`, `area`, `enabled`, `entry_delay`, `delay_on`, `group`,
+`new_entity_id`, `remove`.
+
+**Verification (3 layers — disk alone is misleading due to debounced writes):**
+1. In-memory truth via WebSocket `alarmo/sensors` (source of truth, instant).
+2. Disk after ~15s (the Store flush is debounced; reading too early shows stale).
+3. `alarmo/ready_to_arm_modes` (WebSocket, `entity_id` required) confirms the
+   system can actually arm — does NOT arm it, no sirens. Safe to run anytime.
+
+The panel's `open_sensors` **attribute** is a cached snapshot from the last arm
+attempt; it does not refresh until the next arm cycle. Trust `ready_to_arm_modes`
+over `open_sensors` when verifying a fix.
+
+Notes:
+- Motion sensors → `use_exit_delay: True` so an active sensor never blocks arming;
+  `trigger_unavailable: False` so a brief mesh drop doesn't block arming either.
+- Keypad motion sensors are intentionally `enabled: False` (they false-trigger as
+  you approach to disarm). Don't "fix" them to enabled without a reason.
+- Look up your Alarmo area id with WebSocket `alarmo/areas` — it's install-specific.
+- Same caching caveat applies to other `.storage`-backed configs; prefer the
+  matching API/WebSocket write path over direct file edits everywhere.
+
+---
+
+## Renaming Entities Safely (lessons)
+
+- **WebSocket renames don't update references.** `config/entity_registry/update`
+  with `new_entity_id` changes only the registry. Update every YAML file,
+  dashboard, Alarmo sensor and `homekitbridge.yaml` entry in the same change.
+- **HomeKit Bridge keeps the accessory** through an entity_id rename when the
+  entity has a `unique_id` — the aid is keyed on it. Room, scene and automation
+  assignments survive; the accessory's serial number shows the new entity_id.
+  Still update the bridge filter to the new entity_id, then `homekit/reload`.
+- **Recorder history follows the entity** through a registry rename.
+- **Swapping two names that occupy each other's IDs:** stage through a temp
+  ID — `A → ztmp_x`, `B → A`, `ztmp_x → B`. Never do a direct A ↔ B
+  find-and-replace. Entity IDs cannot contain a double underscore
+  (`sensor.__tmp` fails with "Invalid entity ID"), so use a prefix like `ztmp_`.
+  Same three-pass rule for MQTT topic strings in YAML.
+- **Zigbee2MQTT device rename** that also renames every HA entity of the device:
+  publish to `zigbee2mqtt/bridge/request/device/rename` with
+  `{"from": "Old", "to": "New", "homeassistant_rename": true}`. New entities
+  show `unknown` until the device next reports. When swapping two names, rename
+  the device that frees the target name first.
+- **Check Alarmo without arming:** open the sensor while disarmed, then call
+  WebSocket `alarmo/ready_to_arm_modes` (`entity_id: alarm_control_panel.<yours>`).
+  A blocking sensor drops the returned modes to `[]`. No siren, no arm.
+- **LED test effects:** use `duration` of 30–60 s (and a bright `chase`) when
+  someone has to walk to the switch — short effects expire before they get there.
+
+---
+
 ## Context7 — Always Use for HA Syntax
 
 Context7 is connected as an MCP server. Use it proactively before writing any HA config to avoid deprecated syntax errors.
@@ -632,37 +761,47 @@ Do not rely on training memory for HA YAML syntax — always verify via Context7
 
 ## Skill Update Workflow
 
-This skill lives at the path where you cloned the repo, e.g. `~/path/to/ha-direct-access-skill/ha-direct-access/SKILL.md`
+This skill lives at `{{SKILL_PATH}}/SKILL.md`.
 
-At the **end of any HA work session**, update this file with new patterns, gotchas, or entity IDs discovered during the session. Then repackage (adjust `skill_dir` to your actual clone path):
+At the **end of any HA work session**, update this file with new patterns and gotchas
+discovered during the session — **never** real hosts, tokens or passwords (those stay in
+`.secrets/connection.md`). Then repackage. The script skips `.secrets/`,
+`.secrets.example/` and `.bak` files, and refuses to package if a token-shaped string
+appears anywhere:
 
 ```python
 python3 -c "
-import zipfile, os
-skill_dir = os.path.expanduser('~/path/to/ha-direct-access-skill/ha-direct-access')
+import zipfile, os, sys
+skill_dir = '{{SKILL_PATH}}'
 output = os.path.join(os.path.dirname(skill_dir), 'ha-direct-access.skill')
+keep = []
+for root, dirs, files in os.walk(skill_dir):
+    dirs[:] = [d for d in dirs if d not in ('.secrets', '.secrets.example', '.git')]
+    for f in files:
+        if '.bak' in f or f == '.DS_Store':
+            continue
+        p = os.path.join(root, f)
+        if 'eyJhbGci' + 'OiJ' in open(p, errors='ignore').read():
+            sys.exit('ABORT: token-looking string in ' + p)
+        keep.append(p)
 with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as zf:
-    for root, dirs, files in os.walk(skill_dir):
-        for file in files:
-            filepath = os.path.join(root, file)
-            arcname = os.path.relpath(filepath, os.path.dirname(skill_dir))
-            zf.write(filepath, arcname)
+    for p in keep:
+        zf.write(p, os.path.relpath(p, os.path.dirname(skill_dir)))
 print('Packaged:', output)
 "
 ```
 
 At the **start of any HA work session**, read this file first:
 ```python
-# Use Desktop Commander read_file on ~/path/to/ha-direct-access-skill/ha-direct-access/SKILL.md
+# Use Desktop Commander read_file on {{SKILL_PATH}}/SKILL.md, then {{SKILL_PATH}}/.secrets/connection.md
 ```
 
 ---
 
 ## Notes
 
-- `sshpass` is NOT installed on the Mac — always use paramiko
+- `sshpass` usually isn't installed on macOS — use key-based `ssh` or paramiko
 - `requests` may not be available — always use `urllib.request`
 - Z2M friendly names are case-sensitive; ampersands must be exact (`Living Room Fan & Light Switch`)
 - VZM31-SN `duration: 255` effects persist until cleared — always send `clear_effect` after testing
-- SSH add-on may need restart if connections refused (password not saved in add-on config)
-- The Mac home path has a trailing dot: `/Users/truestorey./` — use this for all Desktop Commander file writes
+- SSH add-on may need a restart if connections are refused (e.g. `authorized_keys` not saved in the add-on config)

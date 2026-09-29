@@ -62,7 +62,7 @@ Full setup instructions: [SETUP.md](ha-direct-access/SETUP.md)
 git clone https://github.com/Bank1824/ha-direct-access-skill.git
 cd ha-direct-access-skill
 
-# 2. Configure with your HA details
+# 2. Configure with your HA details (writes to gitignored ha-direct-access/.secrets/)
 chmod +x ha-direct-access/configure.sh
 ./ha-direct-access/configure.sh
 
@@ -70,7 +70,11 @@ chmod +x ha-direct-access/configure.sh
 python3 -c "
 import zipfile, os
 zf = zipfile.ZipFile('ha-direct-access.skill', 'w', zipfile.ZIP_DEFLATED)
-[zf.write(os.path.join(r,f), os.path.relpath(os.path.join(r,f), '.')) for r,d,files in os.walk('ha-direct-access') for f in files]
+skip = {'.secrets', '.secrets.example'}
+for r, d, files in os.walk('ha-direct-access'):
+    d[:] = [x for x in d if x not in skip]
+    for f in files:
+        zf.write(os.path.join(r, f), os.path.relpath(os.path.join(r, f), '.'))
 zf.close()
 print('Done: ha-direct-access.skill')
 "
@@ -89,7 +93,7 @@ The skill is designed to grow with your setup. As you work with Claude on HA tas
 
 Claude will edit `SKILL.md` on your machine and regenerate the `.skill` file automatically. Reinstall via Settings → Skills.
 
-The `SKILL.md` on your machine is the source of truth. Claude reads it at the start of every session.
+The `SKILL.md` on your machine is the source of truth. Claude reads it at the start of every session. Real connection details never belong in `SKILL.md` itself — they live in the gitignored `.secrets/connection.md` (see [SETUP.md](ha-direct-access/SETUP.md)), so `SKILL.md` stays safe to sync back to this repo or share.
 
 ---
 
@@ -99,9 +103,11 @@ The `SKILL.md` on your machine is the source of truth. Claude reads it at the st
 ha-direct-access-skill/
 ├── README.md
 └── ha-direct-access/
-    ├── SKILL.md        ← The skill (configure before installing)
-    ├── SETUP.md        ← Full prerequisites and setup guide
-    └── configure.sh    ← Interactive config script
+    ├── SKILL.md              ← The skill (generic — no real secrets)
+    ├── SETUP.md               ← Full prerequisites and setup guide
+    ├── configure.sh           ← Interactive config script
+    ├── .secrets.example/      ← Tracked template for connection details
+    └── .secrets/              ← Your real values (gitignored, created by configure.sh)
 ```
 
 ---
