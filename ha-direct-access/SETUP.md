@@ -6,17 +6,14 @@ Full prerequisites and configuration instructions for the ha-direct-access Claud
 
 ## Prerequisites
 
-### 1. claude.ai Pro with Projects
-You need a claude.ai account with Projects enabled (Pro tier or above). This skill is installed per-project via Settings → Skills.
+### 1. Claude desktop app or Claude Code
+- **Claude desktop app:** install the skill under Settings → Skills. Needs Desktop Commander (below) so Claude can reach your network.
+- **Claude Code:** put the `ha-direct-access/` folder in `~/.claude/skills/`. Claude Code runs commands itself, so Desktop Commander isn't needed.
 
-### 2. Desktop Commander MCP
-Desktop Commander gives Claude terminal and filesystem access on your local machine. Without it, Claude cannot reach your HA instance.
+### 2. Desktop Commander (Claude desktop app only)
+Desktop Commander gives Claude terminal and filesystem access on your local machine. Without it, Claude in the desktop app cannot reach your HA instance.
 
-**Install:**
-```bash
-npx @desktopcommander/mcp
-```
-Then connect it: Claude.ai → Settings → Developer → Add MCP Server → follow Desktop Commander instructions at https://desktopcommander.app
+Install it by following the instructions at https://desktopcommander.app.
 
 ### 3. Python 3 + paramiko
 Claude uses `paramiko` to SSH into HA. Python 3 must be on your local machine.
@@ -32,14 +29,23 @@ python3 -c "import paramiko; print('paramiko ok')"
 pip3 install paramiko
 ```
 
-### 4. HA SSH & Terminal Add-on
+### 4. Terminal & SSH Add-on (key-based auth)
 Exposes SSH access to your HA instance on port 22.
 
-**In HA (key-based auth — recommended):**
-1. Settings → Add-ons → Add-on Store → search **Terminal & SSH** → Install
-2. Configuration tab → add your **public key** (`~/.ssh/id_ed25519.pub` or similar) under `authorized_keys` → Save
+**On your machine** — create a key if you don't have one:
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/ha_key
+cat ~/.ssh/ha_key.pub
+```
+
+**In HA:**
+1. Settings → **Apps** (called Add-ons on older HA versions) → store → search **Terminal & SSH** → Install
+2. Configuration tab → **Authorized Keys** → paste the `.pub` line → Save
 3. Network tab → enable port **22** → Save
 4. Start the add-on → enable **Start on boot**
+5. Test from your machine: `ssh -i ~/.ssh/ha_key root@YOUR_HA_IP 'echo ok'`
+
+> ⚠️ **The add-on will not start if both Authorized Keys and Password are empty.** If you're moving from a password to a key, add and test the key first, then clear the password.
 
 Key-based auth means no SSH password is ever stored in this skill's files.
 If your setup can't do key-based auth, the add-on also supports a
@@ -52,7 +58,7 @@ Lets Claude call the HA REST API for lightweight operations like reloads.
 
 **Create one:**
 1. HA → your profile (bottom-left) → Long-Lived Access Tokens → Create Token
-2. Name it `Desktop Commander` → copy the token
+2. Give it a descriptive name (e.g. the machine it's used from) → copy the token
 
 ### 6. Context7 MCP (optional but recommended)
 Injects live HA documentation into Claude's context — prevents deprecated YAML syntax.
@@ -66,7 +72,7 @@ Connect the same way as Desktop Commander.
 
 ## Configuration
 
-Your real HA IP and API token never go into `SKILL.md` — they live in a
+Your real HA IP, SSH key path and API token never go into `SKILL.md` — they live in a
 gitignored `.secrets/connection.md` next to it, which Claude reads from
 your local disk (via Desktop Commander) at runtime. This keeps them out of
 both git history and the packaged `.skill` file you upload.
@@ -79,8 +85,8 @@ chmod +x configure.sh
 ./configure.sh
 ```
 
-Prompts for your HA IP, SSH password (only if not using key-based auth),
-and API token, then writes them into `.secrets/connection.md` and fills in
+Prompts for your HA IP, SSH private key path, an SSH password (only if you
+can't use key-based auth), and API token, then writes them into `.secrets/connection.md` and fills in
 `{{SKILL_PATH}}` in `SKILL.md` so Claude knows the absolute path to find it.
 
 ### Option B — Edit manually
@@ -89,7 +95,8 @@ and API token, then writes them into `.secrets/connection.md` and fills in
 cp ha-direct-access/.secrets.example/connection.md ha-direct-access/.secrets/connection.md
 ```
 
-Then open `.secrets/connection.md` and fill in `{{HA_IP}}` / `{{HA_TOKEN}}`.
+Then open `.secrets/connection.md` and fill in `{{HA_IP}}`, `{{SSH_KEY_PATH}}`
+(absolute path — paramiko doesn't expand `~`) and `{{HA_TOKEN}}`.
 In `SKILL.md`, replace `{{SKILL_PATH}}` with the full absolute path to your
 `ha-direct-access/` folder on disk.
 
@@ -98,26 +105,19 @@ In `SKILL.md`, replace `{{SKILL_PATH}}` with the full absolute path to your
 ## Install the Skill
 
 ### Package
+From the repo root:
 ```bash
-python3 -c "
-import zipfile, os
-zf = zipfile.ZipFile('ha-direct-access.skill', 'w', zipfile.ZIP_DEFLATED)
-skip = {'.secrets', '.secrets.example'}
-for r, d, files in os.walk('ha-direct-access'):
-    d[:] = [x for x in d if x not in skip]
-    for f in files:
-        zf.write(os.path.join(r, f), os.path.relpath(os.path.join(r, f), '.'))
-zf.close()
-print('Done: ha-direct-access.skill')
-"
+python3 package.py
 ```
-`.secrets/` is deliberately excluded — the packaged file never contains your
-real IP, credentials, or token. Don't share the packaged `.skill` file with
+It skips `.secrets/`, `.secrets.example/`, `.git` and backup files, and aborts
+if a token-shaped string is found anywhere in the skill — the packaged file
+never contains your real IP, credentials, or token. Don't share the packaged `.skill` file with
 anyone unless you're certain it was built this way, since older versions of
 this script baked real values directly into `SKILL.md` before zipping.
 
 ### Install
-Claude.ai → Settings → Skills → upload `ha-direct-access.skill` → enable in your project.
+- **Claude desktop app:** Settings → Skills → upload `ha-direct-access.skill` → make sure it's toggled on. To update, upload the new file so a new version replaces the old one (check the Contents tab).
+- **Claude Code:** `ln -s "$PWD/ha-direct-access" ~/.claude/skills/ha-direct-access` — no packaging needed.
 
 ---
 
@@ -133,7 +133,7 @@ Claude will edit `SKILL.md` on your machine and regenerate the `.skill` file. Re
 ## Troubleshooting
 
 **SSH connection refused**
-- Confirm the SSH add-on is running in HA
+- Confirm the SSH add-on is running in HA. If its state is **error**, it usually means both Authorized Keys and Password are empty — add your public key and start it again
 - Make sure port 22 is enabled in the add-on's Network tab
 - Restart the add-on after any config change
 
@@ -146,6 +146,10 @@ pip3 install paramiko --break-system-packages
 
 **Config check returns errors**
 - The error message will point to the exact file and line — fix the YAML issue before reloading
+
+**SSH asks for a password / permission denied (publickey)**
+- The public key in the add-on must match the private key at `{{SSH_KEY_PATH}}`
+- Re-save the add-on config after pasting the key, then restart the add-on
 
 **Token returns 401 Unauthorized**
 - Create a new long-lived token in HA and update `{{HA_TOKEN}}` in `.secrets/connection.md`
