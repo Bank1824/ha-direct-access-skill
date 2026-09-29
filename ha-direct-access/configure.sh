@@ -25,7 +25,7 @@ echo "Writes your HA connection details into $SECRETS_FILE"
 echo "(gitignored, local only — never committed, never zipped into the .skill artifact)."
 echo ""
 
-read -p "HA IP address (e.g. 192.168.1.2): " HA_IP
+read -p "HA IP address (e.g. 192.168.1.100): " HA_IP
 read -p "SSH private key path [~/.ssh/id_ed25519]: " SSH_KEY_PATH
 SSH_KEY_PATH="${SSH_KEY_PATH:-$HOME/.ssh/id_ed25519}"
 SSH_KEY_PATH="${SSH_KEY_PATH/#\~/$HOME}"

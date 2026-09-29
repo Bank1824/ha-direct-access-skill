@@ -201,12 +201,12 @@ For visual confirmation ask a household member to screenshot Settings → Repair
 ### Lights & Switches
 | Entity | Device | Location |
 |--------|--------|----------|
-| `light.living_room` | Hue bulb | Living Room |
+| `light.den` | Hue bulb | Den |
 
 ### Fans
 | Entity | Device | Location |
 |--------|--------|----------|
-| `fan.living_room_fan` | Smart fan | Living Room |
+| `fan.den_fan` | Smart fan | Den |
 
 ### Temperature Sensors
 | Entity | Location |
@@ -238,8 +238,8 @@ MQTT topic format: `zigbee2mqtt/FRIENDLY_NAME/set`
 ## VZM31-SN LED Reference
 
 MQTT set topics:
-- `zigbee2mqtt/Living Room Fan & Light Switch/set`
-- `zigbee2mqtt/Master Bedroom Fan & Light Switch/set`
+- `zigbee2mqtt/Den Fan & Light Switch/set`
+- `zigbee2mqtt/Bedroom Fan & Light Switch/set`
 
 ### LED effect payload
 ```json
@@ -304,21 +304,21 @@ states = json.loads(urllib.request.urlopen(req).read())
 "
 ```
 
-Replace `fan.living_room_fan` / `fan.master_bedroom_fan` in the YAML below with whatever you find.
+Replace `fan.den_fan` / `fan.bedroom_fan` in the YAML below with whatever you find.
 
 ### Step 2 — Helpers (configuration.yaml)
 
 ```yaml
 input_number:
-  living_room_fan_last_speed:
-    name: Living Room Fan Last Speed
+  den_fan_last_speed:
+    name: Den Fan Last Speed
     min: 33
     max: 100
     step: 33
     initial: 66
     icon: mdi:fan
-  master_bedroom_fan_last_speed:
-    name: Master Bedroom Fan Last Speed
+  bedroom_fan_last_speed:
+    name: Bedroom Fan Last Speed
     min: 33
     max: 100
     step: 33
@@ -333,76 +333,76 @@ Deliberately omits `preset_modes` — that is what restores tap-to-toggle in Hom
 ```yaml
 template:
   - fan:
-      - name: "Living Room Fan"
-        unique_id: living_room_fan_hk
+      - name: "Den Fan"
+        unique_id: den_fan_hk
         state: >
-          {{ states('fan.living_room_fan') not in
+          {{ states('fan.den_fan') not in
              ['off', 'unavailable', 'unknown'] }}
         percentage: >
-          {% set p = state_attr('fan.living_room_fan', 'percentage') | int(0) %}
+          {% set p = state_attr('fan.den_fan', 'percentage') | int(0) %}
           {% if p > 0 %}{{ p }}
-          {% else %}{{ states('input_number.living_room_fan_last_speed') | int(66) }}
+          {% else %}{{ states('input_number.den_fan_last_speed') | int(66) }}
           {% endif %}
         speed_count: 3
         turn_on:
           - service: fan.set_percentage
             target:
-              entity_id: fan.living_room_fan
+              entity_id: fan.den_fan
             data:
               percentage: >
-                {{ states('input_number.living_room_fan_last_speed')
+                {{ states('input_number.den_fan_last_speed')
                    | int(66) }}
         turn_off:
           - service: fan.turn_off
             target:
-              entity_id: fan.living_room_fan
+              entity_id: fan.den_fan
         set_percentage:
           - service: fan.set_percentage
             target:
-              entity_id: fan.living_room_fan
+              entity_id: fan.den_fan
             data:
               percentage: "{{ percentage }}"
           - if: "{{ percentage | int(0) > 0 }}"
             then:
               - service: input_number.set_value
                 target:
-                  entity_id: input_number.living_room_fan_last_speed
+                  entity_id: input_number.den_fan_last_speed
                 data:
                   value: "{{ percentage }}"
-      - name: "Master Bedroom Fan"
-        unique_id: master_bedroom_fan_hk
+      - name: "Bedroom Fan"
+        unique_id: bedroom_fan_hk
         state: >
-          {{ states('fan.master_bedroom_fan') not in
+          {{ states('fan.bedroom_fan') not in
              ['off', 'unavailable', 'unknown'] }}
         percentage: >
-          {% set p = state_attr('fan.master_bedroom_fan', 'percentage') | int(0) %}
+          {% set p = state_attr('fan.bedroom_fan', 'percentage') | int(0) %}
           {% if p > 0 %}{{ p }}
-          {% else %}{{ states('input_number.master_bedroom_fan_last_speed') | int(66) }}
+          {% else %}{{ states('input_number.bedroom_fan_last_speed') | int(66) }}
           {% endif %}
         speed_count: 3
         turn_on:
           - service: fan.set_percentage
             target:
-              entity_id: fan.master_bedroom_fan
+              entity_id: fan.bedroom_fan
             data:
               percentage: >
-                {{ states('input_number.master_bedroom_fan_last_speed')
+                {{ states('input_number.bedroom_fan_last_speed')
                    | int(66) }}
         turn_off:
           - service: fan.turn_off
             target:
-              entity_id: fan.master_bedroom_fan
+              entity_id: fan.bedroom_fan
         set_percentage:
           - service: fan.set_percentage
             target:
-              entity_id: fan.master_bedroom_fan
+              entity_id: fan.bedroom_fan
             data:
               percentage: "{{ percentage }}"
           - if: "{{ percentage | int(0) > 0 }}"
             then:
               - service: input_number.set_value
                 target:
-                  entity_id: input_number.master_bedroom_fan_last_speed
+                  entity_id: input_number.bedroom_fan_last_speed
                 data:
                   value: "{{ percentage }}"
 ```
@@ -418,7 +418,7 @@ python3 -c "
 import urllib.request, json
 TOKEN = '{{HA_TOKEN}}'
 req = urllib.request.Request(
-    'http://{{HA_IP}}:8123/api/states/fan.living_room_fan',
+    'http://{{HA_IP}}:8123/api/states/fan.den_fan',
     headers={'Authorization': f'Bearer {TOKEN}'}
 )
 print(json.loads(urllib.request.urlopen(req).read())['attributes'].get('preset_modes'))
@@ -430,42 +430,42 @@ Pick the wind-pattern entry from that list (commonly `smart`, `breeze`, `Breeze`
 ```yaml
 template:
   - switch:
-      - name: "Living Room Fan Breeze"
-        unique_id: living_room_fan_breeze
+      - name: "Den Fan Breeze"
+        unique_id: den_fan_breeze
         icon: mdi:weather-windy
         state: >
-          {{ state_attr('fan.living_room_fan', 'preset_mode') == 'breeze' }}
+          {{ state_attr('fan.den_fan', 'preset_mode') == 'breeze' }}
         turn_on:
           - service: fan.set_preset_mode
             target:
-              entity_id: fan.living_room_fan
+              entity_id: fan.den_fan
             data:
               preset_mode: breeze
         turn_off:
           - service: fan.set_percentage
             target:
-              entity_id: fan.living_room_fan
+              entity_id: fan.den_fan
             data:
               percentage: >
-                {{ states('input_number.living_room_fan_last_speed') | int(66) }}
-      - name: "Master Bedroom Fan Breeze"
-        unique_id: master_bedroom_fan_breeze
+                {{ states('input_number.den_fan_last_speed') | int(66) }}
+      - name: "Bedroom Fan Breeze"
+        unique_id: bedroom_fan_breeze
         icon: mdi:weather-windy
         state: >
-          {{ state_attr('fan.master_bedroom_fan', 'preset_mode') == 'breeze' }}
+          {{ state_attr('fan.bedroom_fan', 'preset_mode') == 'breeze' }}
         turn_on:
           - service: fan.set_preset_mode
             target:
-              entity_id: fan.master_bedroom_fan
+              entity_id: fan.bedroom_fan
             data:
               preset_mode: breeze
         turn_off:
           - service: fan.set_percentage
             target:
-              entity_id: fan.master_bedroom_fan
+              entity_id: fan.bedroom_fan
             data:
               percentage: >
-                {{ states('input_number.master_bedroom_fan_last_speed') | int(66) }}
+                {{ states('input_number.bedroom_fan_last_speed') | int(66) }}
 ```
 
 ### Step 4 — HomeKit filter (homekitbridge.yaml)
@@ -475,13 +475,13 @@ Hide the raw canopy fan from HomeKit; expose only the template fan and the breez
 ```yaml
 filter:
   exclude_entities:
-    - fan.living_room_fan
-    - fan.master_bedroom_fan
+    - fan.den_fan
+    - fan.bedroom_fan
   include_entities:
-    - fan.living_room_fan_hk
-    - fan.master_bedroom_fan_hk
-    - switch.living_room_fan_breeze
-    - switch.master_bedroom_fan_breeze
+    - fan.den_fan_hk
+    - fan.bedroom_fan_hk
+    - switch.den_fan_breeze
+    - switch.bedroom_fan_breeze
 ```
 
 ### Step 5 — Apply
@@ -621,7 +621,7 @@ HEADERS = {'Authorization': f'Bearer {TOKEN}', 'Content-Type': 'application/json
 req = urllib.request.Request(
     'http://{{HA_IP}}:8123/api/services/mqtt/publish',
     data=json.dumps({
-        'topic': 'zigbee2mqtt/Living Room Fan & Light Switch/set',
+        'topic': 'zigbee2mqtt/Den Fan & Light Switch/set',
         'payload': json.dumps({'led_effect': {'effect': 'slow_blink', 'color': 21, 'level': 40, 'duration': 10}})
     }).encode(),
     headers=HEADERS, method='POST'
@@ -802,6 +802,6 @@ At the **start of any HA work session**, read this file first:
 
 - `sshpass` usually isn't installed on macOS — use key-based `ssh` or paramiko
 - `requests` may not be available — always use `urllib.request`
-- Z2M friendly names are case-sensitive; ampersands must be exact (`Living Room Fan & Light Switch`)
+- Z2M friendly names are case-sensitive; ampersands must be exact (`Den Fan & Light Switch`)
 - VZM31-SN `duration: 255` effects persist until cleared — always send `clear_effect` after testing
 - SSH add-on may need a restart if connections are refused (e.g. `authorized_keys` not saved in the add-on config)
