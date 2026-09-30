@@ -729,6 +729,109 @@ Notes:
 
 ---
 
+## Field Lessons — Sirens, HomePods, HomeKit, Garage, Night Mode (2026-09)
+
+### Playing audio clips on HomePods (Apple TV integration / pyatv)
+- pyatv 0.18.0 with miniaudio 1.71 (HA 2026.9.4) stalls ~10 s and then raises
+  `DecodeError('failed to init decoder', -17)` when streaming an **HTTP** audio file larger than
+  ~56 KB (observed with WAV/FLAC; upstream reports MP3/OGG too — a read deadlock in pyatv's HTTP buffer,
+  pyatv PR #2850). WAVs written by macOS `say` also carry a `FLLR` padding chunk that the decoder skips
+  with a relative seek, which pyatv's HTTP reader refuses, so they are likely to fail over HTTP even when
+  small. The fix on recent HA versions: put clips in `/media/<folder>/` and play
+  `media-source://media_source/local/<folder>/<clip>.wav` with `media_content_type: music` — the
+  apple_tv integration hands pyatv the **local file path** and it decodes instantly. TTS output is served
+  over HTTP too, so it hits the same limit.
+- `continue_on_error: true` only swallows `HomeAssistantError` — and not even all of those
+  (ServiceNotFound, TemplateError, ConditionError and vol.Invalid still abort the run). A pyatv/miniaudio
+  exception aborts the whole automation, including a later "restore volume" step. Run each speaker's
+  volume + play in its own small script started with `script.turn_on` (fire-and-forget) so one failure
+  can't abort the caller, and restore volumes from the caller.
+- A HomePod used as an Apple TV's default speaker can report `off` (and therefore no `volume_level`)
+  while still connected. Use the matching `remote.*` entity (`on` = connected) to decide whether to
+  target it.
+- `play_media` over RAOP returns only after the clip finishes — time follow-up clips from the trigger,
+  not from the call.
+
+### Zooz ZSE50 siren: custom sounds
+- No over-the-air upload. Connect a Micro-USB **data** cable; the siren mounts as a small FAT16 drive
+  (it plays nothing while on USB). Back the drive up first.
+- Slots are **not** set by filename. Zooz says fw 1.20+ gives each tone a fixed index; on our fw 1.40
+  units each new file appeared to take the lowest free slot (so a freed slot gets reused). Others report
+  renumbering even after 1.20, so copy one file at a time in the order you want and treat slot numbers
+  as unknown until you read them back from the siren entity's `available_tones`.
+- macOS writes `._*` AppleDouble files onto FAT volumes and the siren indexes them as junk slots. Copy
+  with `cp -X`, then run `dot_clean -m <volume>` once at the end. Files deleted in Finder go to
+  `.Trashes` **on the siren** and are still indexed — delete them from the Dock Trash with
+  "Delete Immediately" rather than "Empty Trash" (which empties the whole Mac trash).
+- After unplugging USB, put it back on wall power, wait ~5 min for indexing, then **Re-interview** the
+  node ("Refresh values" does not reload the tone list). If new slots still show `[empty track]`,
+  re-interview again a few minutes later.
+- Keep names ASCII and short — a 31-character name came back as an 8.3 alias (built-in names up to
+  26 characters display fine), so ≤ 20 characters including `.mp3` is a safe margin. Zooz supports
+  .mp3/.wav at 128 or 192 kbps, < 1 MB each, 50 tones max; mono 128 kbps MP3 level-matched to the
+  other tracks worked well. Built-in tracks 1-8 are **voice** clips ("door open", "door closed", …) —
+  don't use them for countdown or arming beeps.
+- With param 1 = "play once", a long alarm sound must be re-sent in a loop (e.g. every 8 s for a 9 s
+  track) until disarm.
+
+### HomeKit Bridge
+- Apple Home caches a security system's valid modes (Home / Away / Night / Off). Dropping a mode in HA
+  doesn't remove its button — only `homekit.reset_accessory` (or removing and re-adding the accessory)
+  does, and the accessory then comes back as new: restore its name, room, and every Apple Home scene and
+  automation that used it.
+- Deleting a YAML script leaves its entity-registry entry behind (it reappears as a `restored`,
+  `unavailable` state after the next restart); an input_boolean does the same if HA restarts before
+  `input_boolean.reload` runs (a reload removes the registry entry itself). If the domain is bridged and
+  the entity isn't excluded, HomeKit publishes it as a dead "No Response" tile, and Apple Home won't let
+  you delete a single bridged tile. Remove the entry with WebSocket `config/entity_registry/remove`,
+  then reload HomeKit. If the tile still lingers, temporarily re-create the entity with the same
+  entity_id (so the bridge re-attaches the same accessory id), reload, then delete it again and reload.
+
+### Konnected garage door opener (GDOv2-S) and unattended closing
+- `cover.close_cover` makes the firmware play its own pre-close warning (buzzer + LED flash, plus an
+  external strobe if wired to STR; a full 5 s on current firmware, per 16 CFR 1211.14(f)(3)) before
+  pulsing the relay. Never press the separate warning button first.
+- It has no obstruction sensing: the opener's photo-eye reverses the door and HA just sees it come back
+  `open`. `closed` means "left the ceiling range sensor", not "on the floor". App/HA commands report
+  `opening` / `closing`; wall-button and remote operations jump straight between `open` and `closed`.
+- A safe Away-only auto-close: a heads-up push with a "Keep open" action a minute before; consume a
+  latch boolean **before** the first attempt (so a restart can't grant extra tries); cancel with
+  `stop_cover` only while the door is still fully open (a stop while moving is another relay pulse);
+  never retry once the door reached `closed` and came back up (a reversal and someone reopening look
+  identical); re-arm only on a physical door operation: a direct `open`↔`closed` transition while no
+  auto-close run is active, and not a closed→open within ~90 s of a close (a reversal looks exactly like
+  that). 16 CFR 1211.14(f)(4)(iii)–(iv) allows one retry after a reversal, then requires renewed input
+  from a wall button/remote/keypad; this design is stricter and allows none after a reversal.
+- Add `delay_off` (e.g. 60 s) to any alarm sensor built from the cover so a reversal can't set off the
+  alarm in an empty house — trade-off: a real reopen within that window of a close is not seen by the
+  alarm.
+
+### Alarm, keypads and chimes
+- Once armed, let the entry countdown own the sirens and keypads. On a Ring Keypad G2, writing a mode
+  indicator switches the pad's mode, and even a chime beep on a generic-sound indicator (e.g. 96, pk9)
+  knocked pads out of the entry-delay countdown.
+- Don't push YAML changes while the alarm is pending or triggered — an automation/script reload restarts
+  every automation or script whose config changed, cancelling its in-flight run, so an edit to the
+  countdown/announcement logic stops it part-way through.
+- Ring Keypad G2: the battery is sealed (there is no true power cycle), and the pinhole un-pairs the pad
+  (tap during exclusion) or factory-resets it (10 s hold). When a pad ignores writes, check its
+  `*_ac_mains_disconnected` sensor first — in one case every write to an unplugged pad failed with
+  zwave-js ZW1405 (S2 frame could not be decoded) until it was plugged back in.
+- Bedtime auto-lock: only lock a door whose contact sensor says **closed** (a smart lock without its
+  own door sensor will throw the bolt into an open door), wait for `locked`, and report what actually
+  locked — a successful `lock.lock` call doesn't mean the bolt threw (a jam only appears later as the
+  `jammed` state), and `continue_on_error` hides the commands that fail outright (e.g. dropped Thread
+  commands).
+
+### One "Night Mode" switch instead of clock windows
+- Replace scattered `now().hour >= 22` / `time: after/before` checks with one `input_boolean.night_mode`,
+  turned on by a bedtime routine (with a fixed-time backup) and off by a morning routine. Keypad
+  profiles, chime volumes, switch-LED levels, reminders and a bedtime check all key off it, so a late
+  night or a lie-in shifts everything at once. Keep security sounds (entry countdown, alarm) at full
+  volume at night.
+
+---
+
 ## Context7 — Always Use for HA Syntax
 
 Context7 is connected as an MCP server. Use it proactively before writing any HA config to avoid deprecated syntax errors.
