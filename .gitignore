@@ -1,0 +1,12 @@
+# Packaged skill file (built artifact — do not commit)
+*.skill
+
+# configure.sh backup (created and removed automatically, but just in case)
+*.bak
+
+# macOS
+.DS_Store
+
+# Real connection details (IP, SSH creds, API token) — never commit these.
+# Copy .secrets.example/ to .secrets/ and fill in your own instance's values.
+**/.secrets/
